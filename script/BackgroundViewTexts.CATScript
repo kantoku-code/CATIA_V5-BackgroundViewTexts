@@ -1,0 +1,364 @@
+Option Explicit
+
+'*** 設定 変更しないで下さい ***
+Const debugFg = False
+Const SEPARATOR = ","
+Const ENTER_LIKE = "_"
+Const SCRIPT_NAME = "BackgroundViewTexts"
+Const LIST_FILE_NAME = "BackgroundViewTexts_IptLst.txt"
+'***
+
+Sub CATMain()
+
+    dim sTime as Double 
+    sTime = Timer
+
+    Dim listPath As String
+    listPath = CATIA.SystemService.Environ("CATTemp") + "\" + LIST_FILE_NAME
+
+    Dim paths As Variant
+    paths = get_exists_paths(listPath)
+
+    Dim backupAtt As Boolean
+    backupAtt = get_att_refDoc()
+
+    set_att_refDoc false
+
+    Dim docs As Variant
+    docs = open_docs(paths)
+
+    'set_att_refDoc backupAtt
+    if ubound(docs) < 0 then
+		msg = "処理すべきファイルが有りませんでした"
+    		Call finish(listPath, msg)
+	End If
+
+    Dim msg As String
+    msg = "-- 処理後のファイルリストです --" + vbCrLf
+
+    Dim doc As DrawingDocument
+    Dim info As String
+    Dim infoPath As String
+    Dim i As Long
+    For i = 0 To UBound(docs)
+        Set doc = docs(i)
+        info = get_doc_background_infos(doc)
+        
+        infoPath = get_unique_path(doc.FullName, "csv")
+        
+        write_file infoPath, info
+        doc.Close
+        
+        msg = msg & infoPath & vbCrLf
+    Next
+
+    If debugFg Then
+        msg = "-- " & Timer - sTime & "s --" & vbcrlf & msg
+    End If
+
+    Call finish(listPath, msg)
+
+End Sub
+
+Private Sub finish(ByVal removePath As String, ByVal msg As String)
+
+    Call get_fso.DeleteFile(removePath)
+    MsgBox msg, vbOKOnly, SCRIPT_NAME
+    CATIA.Quit
+
+End Sub
+
+Private Function get_doc_background_infos(ByVal dDoc As DrawingDocument) As String
+
+    Dim sheets As Variant
+    sheets = get_sheets(dDoc)
+
+    Dim infos As Variant
+    infos = init_array(UBound(sheets))
+
+    Dim i As Long, sheet As AnyObject
+    For i = 0 To UBound(sheets)
+        Set sheet = sheets(i)
+        infos(i) = create_sheet_infos(sheet)
+    Next
+
+    get_doc_background_infos = Join(infos, vbCrLf)
+
+End Function
+
+
+Private Function create_sheet_infos(ByVal sheet As DrawingSheet) As String
+
+    Dim ngWords As Variant
+    ngWords = Array(vbCrLf, vbLf, vbCr, ",")
+
+    Dim txts As Variant
+    txts = get_drawTxts(sheet)
+
+    Dim infos As Variant
+    infos = init_array(UBound(txts))
+
+    Dim i As Long
+    Dim value As String, ngWordstr As String, j As Long
+    For i = 0 To UBound(txts)
+        value = txts(i).text
+        For j = 0 To UBound(ngWords)
+            value = Replace(value, ngWords(j), ENTER_LIKE)
+        Next
+        'pMsg value
+        infos(i) = Join(Array(sheet.name, txts(i).name, value), SEPARATOR)
+    Next
+    
+    create_sheet_infos = Join(infos, vbCrLf)
+
+End Function
+
+
+Private Function get_drawTxts(sheet As AnyObject) As Variant
+
+    Dim doc As DrawingDocument
+    Set doc = get_parent_of_T(sheet, "DrawingDocument")
+
+    Dim sel As Selection
+    Set sel = doc.Selection
+
+    CATIA.HSOSynchronized = False
+    sel.Clear
+    sel.Add sheet.views.item(2)
+    sel.Search "CATDrwSearch.DrwText,sel"
+
+    If sel.Count2 < 1 Then
+        get_drawTxts = Array()
+        Exit Function
+    End If
+
+    Dim txts As Variant
+    txts = init_array(sel.Count2 - 1)
+
+    Dim i As Long
+    For i = 1 To sel.Count2
+        Set txts(i - 1) = sel.Item2(i).value
+    Next
+
+    sel.Clear
+    CATIA.HSOSynchronized = True
+
+    get_drawTxts = txts
+    
+End Function
+
+
+Private Function get_sheets(drawDoc As DrawingDocument) As Variant
+
+    Dim sheets As Variant
+    sheets = init_array(drawDoc.sheets.count - 1)
+
+    Dim count As Long
+    count = -1
+
+    Dim sheet As DrawingSheet
+    For Each sheet In drawDoc.sheets
+        If sheet.isDetail = False Then
+            count = count + 1
+            Set sheets(count) = sheet
+        End If
+    Next
+
+    ReDim Preserve sheets(count)
+
+    get_sheets = sheets
+
+End Function
+
+
+Private Function open_docs(ByVal paths As Variant) As Variant
+
+    Dim docs As Variant
+    docs = init_array(UBound(paths))
+
+    Dim i As Long, path As String
+    For i = 0 To UBound(paths)
+        path = paths(i)
+        Set docs(i) = CATIA.Documents.Open(path)
+    Next
+    
+    open_docs = docs
+
+End Function
+
+
+Private Function get_exists_paths(ByVal path As String) As Variant
+
+    get_exists_paths = Array()
+
+    If Not is_exists(path) Then
+        MsgBox "処理すべきファイルリストが見つかりませんでした!"
+        Exit Function
+    End If
+
+    Dim paths As Variant
+    paths = read_file(path)
+
+    Dim existsPaths As Variant
+    existsPaths = init_array(UBound(paths))
+
+    Dim count As Long
+    count = -1
+
+    Dim i As Long
+    For i = 0 To UBound(paths)
+        If is_exists(paths(i)) Then
+            count = count + 1
+            existsPaths(count) = paths(i)
+        End If
+    Next
+        
+    ReDim Preserve existsPaths(count)
+
+    get_exists_paths = existsPaths
+    
+End Function
+
+
+Private Function get_att_refDoc() As Boolean
+
+    Dim att As GeneralSessionSettingAtt
+    Set att = CATIA.SettingControllers.Item("CATCafGeneralSessionSettingCtrl")
+
+    get_att_refDoc = att.RefDoc
+
+End Function
+
+
+Private Sub set_att_refDoc(ByVal value As Boolean)
+
+    Dim att As GeneralSessionSettingAtt
+    Set att = CATIA.SettingControllers.Item("CATCafGeneralSessionSettingCtrl")
+
+    att.RefDoc = value
+
+End Sub
+
+
+Private Function get_parent_of_T(aoj As AnyObject, t As String) As AnyObject
+    
+    Dim aojName As String
+    Dim parentName As String
+    
+    On Error Resume Next
+        aojName = aoj.name
+        parentName = aoj.Parent.name
+    On Error GoTo 0
+
+    If TypeName(aoj) = TypeName(aoj.Parent) And _
+       aojName = parentName Then
+        Set get_parent_of_T = Nothing
+        Exit Function
+    End If
+    If TypeName(aoj) = t Then
+        Set get_parent_of_T = aoj
+    Else
+        Set get_parent_of_T = get_parent_of_T(aoj.Parent, t)
+    End If
+
+End Function
+
+
+Private Function init_array(ByVal count As Long) As Variant
+
+    If count < 0 Then
+        count = 0
+    End If
+
+    Dim ary() As Variant
+    ReDim ary(count)
+
+    init_array = ary
+
+End Function
+
+
+Private Function get_unique_path(ByVal path As String, ByVal suffix As String) As String
+
+    Dim pathAry As Variant
+    pathAry = split_path_name(path)
+    
+    If Len(suffix) < 1 Then
+        suffix = pathAry(2)
+    End If
+    
+    Dim baseName As String
+    baseName = pathAry(0) & "\" & pathAry(1)
+    
+    Dim tmpPath As String
+    tmpPath = baseName & "." & suffix
+    
+    If is_exists(tmpPath) = False Then
+        get_unique_path = tmpPath
+        Exit Function
+    End If
+    
+    Dim i As Long
+    i = 0
+
+    Do
+        i = i + 1
+        tmpPath = baseName & "_" + CStr(i) & "." & suffix
+        If Not is_exists(tmpPath) Then
+            get_unique_path = tmpPath
+            Exit Function
+        End If
+    Loop
+
+End Function
+
+
+Private Function get_fso() As Object
+
+    Set get_fso = CreateObject("Scripting.FileSystemObject")
+
+End Function
+
+
+Private Function split_path_name(ByVal fullPath As String) As Variant
+
+    Dim path(2) As String
+    With get_fso
+        path(0) = .GetParentFolderName(fullPath)
+        path(1) = .GetBaseName(fullPath)
+        path(2) = .GetExtensionName(fullPath)
+    End With
+    split_path_name = path
+
+End Function
+
+
+Private Function is_exists(ByVal path As String) As Boolean
+
+    is_exists = get_fso.FileExists(path)
+
+End Function
+
+
+Private Function read_file(ByVal path As String) As Variant
+
+    With get_fso.GetFile(path).OpenAsTextStream
+        read_file = Split(.ReadAll, vbNewLine)
+        .Close
+    End With
+
+End Function
+
+
+Private Sub write_file(ByVal path As String, ByVal txt As String)
+
+    On Error Resume Next
+        Call get_fso.OpenTextFile(path, 2, True, -1).Write(txt)
+    On Error GoTo 0
+
+End Sub
+
+
+Private Sub pMsg(s)
+    'Debug.Print s
+End Sub
